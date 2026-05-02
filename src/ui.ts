@@ -38,12 +38,27 @@ export function mount(root: HTMLElement) {
     <div class="app-shell">
       <header class="topbar">
         <button class="icon-btn" id="btn-menu" aria-label="Conversations">☰</button>
-        <div class="title">
+        <button class="title" id="btn-model" aria-label="Model & compaction">
           <div class="name">Bubble</div>
           <div class="model" id="model-label"></div>
-        </div>
+        </button>
         <button class="icon-btn" id="btn-settings" aria-label="Settings">⚙</button>
       </header>
+
+      <div class="popover hidden" id="model-popover">
+        <div class="popover-section">
+          <div class="popover-label">Active model — tap to swap</div>
+          <div class="model-toggle" id="model-toggle"></div>
+        </div>
+        <div class="popover-section">
+          <div class="popover-label">This conversation</div>
+          <div class="token-row" id="token-row"></div>
+        </div>
+        <div class="popover-section">
+          <button class="popover-btn" id="btn-compact-now">📦 Compact conversation</button>
+          <div class="popover-hint">Summarizes via <span id="compact-model-name"></span> and replaces history. You can also type <code>/compact</code>.</div>
+        </div>
+      </div>
 
       <main class="chat-scroll" id="chat"></main>
 
@@ -81,6 +96,16 @@ export function mount(root: HTMLElement) {
 
   // bindings
   $<HTMLButtonElement>('#btn-menu')!.addEventListener('click', () => toggleDrawer(true));
+  $<HTMLButtonElement>('#btn-model')!.addEventListener('click', () => toggleModelPopover());
+  $<HTMLButtonElement>('#btn-compact-now')!.addEventListener('click', async () => { toggleModelPopover(false); await runCompact(); });
+  document.addEventListener('click', (e) => {
+    const pop = $<HTMLDivElement>('#model-popover');
+    const trigger = $<HTMLButtonElement>('#btn-model');
+    if (!pop || !trigger) return;
+    if (pop.classList.contains('hidden')) return;
+    const t = e.target as Node;
+    if (!pop.contains(t) && !trigger.contains(t)) toggleModelPopover(false);
+  });
   $<HTMLButtonElement>('#btn-close-drawer')!.addEventListener('click', () => toggleDrawer(false));
   $<HTMLButtonElement>('#btn-settings')!.addEventListener('click', () => { renderSettingsSheet(); toggleSheet(true); });
   $<HTMLButtonElement>('#btn-close-sheet')!.addEventListener('click', () => toggleSheet(false));
@@ -161,8 +186,32 @@ function updateSendBtn() {
 function renderModelLabel() {
   const el = $<HTMLDivElement>('#model-label');
   if (!el) return;
-  const m = store.current?.model || store.settings.claude_model;
-  el.textContent = m;
+  const m = store.settings.claude_model;
+  const tok = formatTokens(totalConversationTokens());
+  el.textContent = `${m} · ${tok}`;
+}
+
+// ─── Token counter (chars/4 heuristic) ───
+function approxTokens(text: string | undefined): number {
+  return Math.ceil((text || '').length / 4);
+}
+function totalConversationTokens(): number {
+  if (!store.current) return 0;
+  let total = approxTokens(effectiveSystemPrompt());
+  total += approxTokens(store.current.compactionSummary);
+  for (const m of store.current.messages) {
+    total += approxTokens(m.content);
+    total += approxTokens(m.thinking);
+    if (m.attachments) {
+      for (const a of m.attachments) total += approxTokens(a.text);
+    }
+  }
+  return total;
+}
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n} tok`;
+  if (n < 100_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
 }
 
 // ─── Prompt chips (1 system + 2 userstyle, toggleable inline) ───
@@ -193,10 +242,132 @@ function renderPromptChips() {
 function effectiveSystemPrompt(): string {
   const s = store.settings;
   const parts: string[] = [];
+  if (store.current?.compactionSummary) {
+    parts.push(`<previous_conversation_summary>\n${store.current.compactionSummary}\n</previous_conversation_summary>`);
+  }
   if (s.system_prompt_enabled && s.system_prompt?.trim()) parts.push(s.system_prompt.trim());
   if (s.userstyle1_enabled && s.userstyle1?.trim()) parts.push(s.userstyle1.trim());
   if (s.userstyle2_enabled && s.userstyle2?.trim()) parts.push(s.userstyle2.trim());
   return parts.join('\n\n');
+}
+
+// ─── Model popover ───
+function toggleModelPopover(force?: boolean) {
+  const pop = $<HTMLDivElement>('#model-popover');
+  if (!pop) return;
+  const open = force === undefined ? pop.classList.contains('hidden') : force;
+  if (open) {
+    renderModelPopover();
+    pop.classList.remove('hidden');
+  } else {
+    pop.classList.add('hidden');
+  }
+}
+
+function renderModelPopover() {
+  const s = store.settings;
+  const toggle = $<HTMLDivElement>('#model-toggle');
+  if (toggle) {
+    const a = s.claude_model;
+    const b = s.claude_alt_model || s.claude_model;
+    toggle.innerHTML = `
+      <button class="seg ${'on'}" data-pick="primary">${escHtml(a)}</button>
+      <button class="seg" data-pick="alt">${escHtml(b)}</button>
+    `;
+    toggle.querySelector<HTMLButtonElement>('[data-pick="alt"]')?.addEventListener('click', async () => {
+      // Swap primary <-> alt
+      await store.updateSettings({ claude_model: b, claude_alt_model: a });
+      renderModelPopover();
+      buzz();
+    });
+  }
+  const tokens = totalConversationTokens();
+  const tokRow = $<HTMLDivElement>('#token-row');
+  if (tokRow) {
+    tokRow.innerHTML = `
+      <div class="tok-num">${formatTokens(tokens)}</div>
+      <div class="tok-sub">approx tokens · using chars÷4</div>
+    `;
+  }
+  const cmName = $<HTMLSpanElement>('#compact-model-name');
+  if (cmName) cmName.textContent = s.compact_model;
+}
+
+// ─── /compact: summarize current conversation, replace messages ───
+let compacting = false;
+async function runCompact() {
+  if (compacting) return;
+  if (!store.current || !store.current.messages.length) {
+    toast('Nothing to compact yet', 'info');
+    return;
+  }
+  if (store.streaming) { toast('Wait for the current response to finish', 'error'); return; }
+
+  const s = store.settings;
+  if (!s.reverse_proxy || !s.proxy_password) {
+    toast('Set the proxy URL + password in Settings first', 'error');
+    return;
+  }
+  if (!s.compact_model) { toast('No compact model set', 'error'); return; }
+
+  compacting = true;
+  const beforeTokens = totalConversationTokens();
+  toast('Compacting…');
+
+  // Build the compact prompt
+  const compactSystem = `You are a conversation summarizer. Produce a concise, information-dense summary of the conversation that follows. Preserve:
+• The user's goals, intent, and any open questions
+• Key decisions or conclusions
+• Important facts, code snippets, or exact values shared
+• The state of any ongoing tasks
+• Notable preferences or style requirements
+Output ONLY the summary as plain prose. Do not respond conversationally, do not greet, do not add commentary. The summary will replace the conversation history.`;
+
+  // Use the existing streamChat machinery with the compact_model + non-streaming
+  const { streamChat } = await import('./api');
+  let summary = '';
+  try {
+    await new Promise<void>((resolve, reject) => {
+      streamChat(
+        { ...store.settings, claude_model: s.compact_model, stream_openai: false, openai_max_tokens: 8000 },
+        store.current!.messages,
+        compactSystem,
+        {
+          onText: (delta) => { summary += delta; },
+          onDone: ({ text }) => { if (!summary && text) summary = text; resolve(); },
+          onError: (e) => reject(e),
+        },
+      );
+    });
+  } catch (e) {
+    compacting = false;
+    toast(`Compact failed: ${(e as Error).message}`, 'error');
+    return;
+  }
+
+  if (!summary || !summary.trim()) {
+    compacting = false;
+    toast('Compact returned empty result', 'error');
+    return;
+  }
+
+  // Persist into the conversation: clear messages, store summary
+  const c = store.current!;
+  // If there was already a previous summary, fold it in
+  const merged = c.compactionSummary
+    ? `${c.compactionSummary.trim()}\n\n---\n\n${summary.trim()}`
+    : summary.trim();
+  c.compactionSummary = merged;
+  c.compactedAt = Date.now();
+  c.compactedTokenCount = beforeTokens;
+  c.messages = [];
+  // Drop DOM cache for messages
+  for (const [, el] of msgNodes) el.remove();
+  msgNodes.clear();
+  await store.saveCurrent();
+  compacting = false;
+  toast(`Compacted ✓ ${formatTokens(beforeTokens)} → ${formatTokens(approxTokens(summary))}`);
+  buzz(20);
 }
 
 // ─── Drawer ───
@@ -270,17 +441,22 @@ function renderChat() {
   const root = ensureChatRoot();
   if (!root) return;
   const c = store.current;
-  if (!c || !c.messages.length) { renderEmptyState(root); return; }
+  if (!c || (!c.messages.length && !c.compactionSummary)) { renderEmptyState(root); return; }
 
   // Reconcile DOM with messages list: keep nodes for messages that still exist,
   // create/delete only what's necessary, no big rebuild.
   if (root.querySelector('.chat-empty')) root.innerHTML = '';
+
+  // Render compaction card if present
+  renderCompactionCard(root, c);
 
   const wantedSet = new Set(c.messages.map(m => m.id));
   for (const [id, el] of msgNodes) {
     if (!wantedSet.has(id)) { el.remove(); msgNodes.delete(id); }
   }
 
+  // Account for the compaction card sitting at the top of #chat (if present).
+  const offset = root.querySelector('.compaction-card') ? 1 : 0;
   for (let i = 0; i < c.messages.length; i++) {
     const m = c.messages[i];
     let el = msgNodes.get(m.id);
@@ -290,15 +466,61 @@ function renderChat() {
     } else {
       updateMessageEl(el, m);
     }
-    const existing = root.children[i];
+    const existing = root.children[i + offset];
     if (existing !== el) root.insertBefore(el, existing || null);
   }
 
-  while (root.children.length > c.messages.length) {
-    root.removeChild(root.lastChild!);
-  }
+  // (Removal of stray nodes handled implicitly by msgNodes pruning above.)
 
   scrollToBottomSoon();
+}
+
+function renderCompactionCard(root: HTMLElement, c: { compactionSummary?: string; compactedAt?: number; compactedTokenCount?: number; }) {
+  let card = root.querySelector<HTMLDivElement>('.compaction-card');
+  if (!c.compactionSummary) { card?.remove(); return; }
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'compaction-card';
+    root.prepend(card);
+  } else if (root.firstChild !== card) {
+    root.prepend(card);
+  }
+  const when = c.compactedAt ? new Date(c.compactedAt).toLocaleString() : '';
+  const before = c.compactedTokenCount ?? 0;
+  const after = approxTokens(c.compactionSummary);
+  card.innerHTML = `
+    <div class="head">
+      <span class="ico">📦</span>
+      <div class="meta">
+        <div class="t">Compacted ${when}</div>
+        <div class="s">${formatTokens(before)} → ${formatTokens(after)} (~${Math.round((1 - after / Math.max(before, 1)) * 100)}% smaller)</div>
+      </div>
+      <button class="expand" aria-label="View summary">▾</button>
+    </div>
+    <div class="body hidden">
+      <pre>${escHtml(c.compactionSummary)}</pre>
+      <div class="actions">
+        <button class="btn-secondary" data-act="recompact">Compact again</button>
+        <button class="btn-secondary" data-act="clear-compaction">Clear summary</button>
+      </div>
+    </div>
+  `;
+  const exp = card.querySelector<HTMLButtonElement>('.expand');
+  const body = card.querySelector<HTMLDivElement>('.body');
+  exp?.addEventListener('click', () => {
+    body?.classList.toggle('hidden');
+    if (exp) exp.textContent = body?.classList.contains('hidden') ? '▾' : '▴';
+  });
+  card.querySelector<HTMLButtonElement>('[data-act="recompact"]')?.addEventListener('click', () => runCompact());
+  card.querySelector<HTMLButtonElement>('[data-act="clear-compaction"]')?.addEventListener('click', async () => {
+    if (!confirm('Remove the conversation summary? Messages stay, but the summary context is dropped.')) return;
+    if (store.current) {
+      store.current.compactionSummary = undefined;
+      store.current.compactedAt = undefined;
+      store.current.compactedTokenCount = undefined;
+      await store.saveCurrent();
+    }
+  });
 }
 
 let scrollPending = false;
@@ -523,6 +745,14 @@ async function onSendOrCancel() {
   const ta = $<HTMLTextAreaElement>('#composer-input')!;
   const text = ta.value.trim();
   if (!text && pendingAttachments.length === 0) return;
+
+  // Slash commands
+  if (text === '/compact' && pendingAttachments.length === 0) {
+    ta.value = '';
+    autoGrow(ta);
+    await runCompact();
+    return;
+  }
 
   const userMsg: Message = {
     id: newId(),

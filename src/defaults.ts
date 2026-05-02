@@ -8,6 +8,8 @@ export const DEFAULT_SETTINGS: Settings = {
   reverse_proxy: '',
   proxy_password: '',
   claude_model: 'claude-opus-4-5',
+  claude_alt_model: 'claude-opus-4-6',
+  compact_model: 'claude-opus-4-6',
   custom_model: '',
   custom_url: '',
   bypass_status_check: false,
@@ -73,9 +75,12 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const CLAUDE_MODELS = [
+  'claude-opus-4-6',
   'claude-opus-4-5',
   'claude-opus-4-1',
   'claude-opus-4',
+  'claude-sonnet-4-7',
+  'claude-sonnet-4-6',
   'claude-sonnet-4-5',
   'claude-sonnet-4',
   'claude-3-7-sonnet',

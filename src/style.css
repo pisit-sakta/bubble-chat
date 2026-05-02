@@ -474,6 +474,160 @@ details.adv .sub h4 {
   .msg .meta button { background: var(--bg-elev); }
 }
 
+/* topbar title is now a button */
+.topbar button.title {
+  background: transparent;
+  border-radius: 10px;
+  padding: 4px 10px;
+  transition: background 0.15s var(--ease);
+}
+.topbar button.title:active { background: var(--bg-elev-2); }
+
+/* popover (model + token + compact) */
+.popover {
+  position: fixed;
+  top: calc(var(--safe-top) + var(--header-h) + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+  z-index: 80;
+  width: min(92vw, 380px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: pop-in 0.18s var(--ease-out);
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.popover-section { display: flex; flex-direction: column; gap: 6px; }
+.popover-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.popover-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.popover-hint code {
+  font-family: var(--font-mono);
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+.popover-btn {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  transition: background 0.15s, transform 0.12s var(--ease);
+}
+.popover-btn:active { background: var(--accent-hover); transform: scale(0.98); }
+
+.model-toggle {
+  display: flex;
+  background: var(--bg-elev);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+.model-toggle .seg {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+  font-variant-numeric: tabular-nums;
+}
+.model-toggle .seg.on {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+.model-toggle .seg:active { transform: scale(0.97); }
+
+.token-row {
+  background: var(--bg-elev);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.token-row .tok-num {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.token-row .tok-sub { font-size: 11px; color: var(--text-faint); }
+
+/* compaction card at top of chat */
+.compaction-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  animation: slide-in 0.3s var(--ease-out);
+}
+.compaction-card .head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.compaction-card .head .ico { font-size: 18px; }
+.compaction-card .head .meta { flex: 1; min-width: 0; }
+.compaction-card .head .meta .t { font-size: 13px; font-weight: 500; color: var(--text); }
+.compaction-card .head .meta .s { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.compaction-card .head .expand {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--text-dim); font-size: 14px;
+  transition: background 0.12s var(--ease);
+}
+.compaction-card .head .expand:active { background: var(--bg-elev-2); }
+.compaction-card .body {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.compaction-card .body pre {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.compaction-card .body .actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.compaction-card .body .btn-secondary { font-size: 12px; padding: 6px 10px; }
+
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 

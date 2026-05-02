@@ -9,6 +9,8 @@ export interface Settings {
   reverse_proxy: string;          // e.g. https://claude-code-proxy-production.up.railway.app/v1
   proxy_password: string;         // sent as Bearer token
   claude_model: string;
+  claude_alt_model: string;       // The other-model in the quick toggle
+  compact_model: string;           // Used by /compact (defaults to Sonnet 4.6 for 1M context)
   custom_model: string;
   custom_url: string;
   bypass_status_check: boolean;
@@ -116,6 +118,9 @@ export interface Conversation {
   messages: Message[];
   model: string;
   systemPromptOverride?: string;  // optional per-chat override
+  compactionSummary?: string;      // injected as system context after /compact
+  compactedAt?: number;            // timestamp of last compaction
+  compactedTokenCount?: number;    // approx tokens that were summarized
   createdAt: number;
   updatedAt: number;
 }
