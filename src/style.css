@@ -368,6 +368,49 @@ a { color: var(--accent); text-decoration: none; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { border-color: var(--danger); }
 
+/* variant navigator */
+.variant-nav {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 4px; margin-top: 4px;
+  font-size: 11px; color: var(--text-faint);
+  background: var(--bg-elev); border-radius: 12px;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.variant-nav button {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--text-dim); font-size: 14px; line-height: 1;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.variant-nav button:active { background: var(--bg-elev-2); color: var(--text); }
+.variant-nav span { padding: 0 4px; }
+
+/* edit-mode bubble */
+.msg.editing .bubble {
+  background: var(--bg-input);
+  padding: 8px;
+  width: min(86%, 560px);
+  max-width: 86%;
+}
+.edit-input {
+  width: 100%; min-height: 60px; max-height: 320px;
+  background: transparent; color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px; line-height: 1.5;
+  resize: vertical;
+}
+.edit-actions {
+  display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px;
+}
+.edit-actions .btn-primary, .edit-actions .btn-secondary { padding: 6px 12px; font-size: 13px; }
+
+/* meta row visible always on touch */
+@media (hover: none) {
+  .msg .meta { opacity: 1; }
+  .msg .meta button { background: var(--bg-elev); }
+}
+
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 

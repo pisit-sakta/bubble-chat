@@ -208,44 +208,138 @@ function lastMessagePreview(msgs: Message[]): string {
   return '';
 }
 
-// ─── Chat view ───
-function renderChat() {
-  const root = $<HTMLDivElement>('#chat');
-  if (!root) return;
-  const c = store.current;
-  if (!c || !c.messages.length) {
-    root.innerHTML = `
-      <div class="chat-empty">
-        <div>
-          <div class="logo">🫧</div>
-          <div class="title">Start a conversation</div>
-          <div class="sub">Anything goes — code, debugging, prose, weird hypotheticals</div>
-        </div>
-      </div>`;
-    return;
-  }
-  root.innerHTML = c.messages.map(renderMessage).join('');
-  // attach copy/delete handlers
-  root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const action = btn.dataset.action!;
-      const mid = btn.dataset.mid!;
-      handleMessageAction(action, mid);
-    });
-  });
-  // thinking toggle
-  root.querySelectorAll<HTMLDivElement>('.thinking-toggle').forEach(t => {
-    t.addEventListener('click', () => {
-      const next = t.nextElementSibling as HTMLElement | null;
-      if (next) next.classList.toggle('hidden');
-    });
-  });
-  // scroll to bottom
-  root.scrollTop = root.scrollHeight;
+// ─── Chat view (incremental DOM, perf-aware) ───
+
+const msgNodes = new Map<string, HTMLElement>();
+let streamingMsgId: string | null = null;
+
+function ensureChatRoot(): HTMLDivElement | null {
+  return $<HTMLDivElement>('#chat');
 }
 
-function renderMessage(m: Message): string {
+function renderEmptyState(root: HTMLDivElement) {
+  root.innerHTML = `
+    <div class="chat-empty">
+      <div>
+        <div class="logo">🫧</div>
+        <div class="title">Start a conversation</div>
+        <div class="sub">Anything goes — code, debugging, prose, weird hypotheticals</div>
+      </div>
+    </div>`;
+  msgNodes.clear();
+}
+
+function renderChat() {
+  const root = ensureChatRoot();
+  if (!root) return;
+  const c = store.current;
+  if (!c || !c.messages.length) { renderEmptyState(root); return; }
+
+  // Reconcile DOM with messages list: keep nodes for messages that still exist,
+  // create/delete only what's necessary, no big rebuild.
+  if (root.querySelector('.chat-empty')) root.innerHTML = '';
+
+  const wantedSet = new Set(c.messages.map(m => m.id));
+  for (const [id, el] of msgNodes) {
+    if (!wantedSet.has(id)) { el.remove(); msgNodes.delete(id); }
+  }
+
+  for (let i = 0; i < c.messages.length; i++) {
+    const m = c.messages[i];
+    let el = msgNodes.get(m.id);
+    if (!el) {
+      el = createMessageEl(m);
+      msgNodes.set(m.id, el);
+    } else {
+      updateMessageEl(el, m);
+    }
+    const existing = root.children[i];
+    if (existing !== el) root.insertBefore(el, existing || null);
+  }
+
+  while (root.children.length > c.messages.length) {
+    root.removeChild(root.lastChild!);
+  }
+
+  scrollToBottomSoon();
+}
+
+let scrollPending = false;
+function scrollToBottomSoon() {
+  if (scrollPending) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    const root = ensureChatRoot();
+    if (root) root.scrollTop = root.scrollHeight;
+  });
+}
+
+function createMessageEl(m: Message): HTMLElement {
+  const el = document.createElement('div');
+  el.className = `msg ${m.role}`;
+  el.dataset.id = m.id;
+  el.innerHTML = messageInnerHtml(m, false);
+  bindMessageHandlers(el);
+  return el;
+}
+
+function updateMessageEl(el: HTMLElement, m: Message) {
+  if (m.id === streamingMsgId) {
+    updateStreamingBody(el, m);
+    return;
+  }
+  // Skip re-render when the message hasn't actually changed
+  const sig = msgSig(m);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = messageInnerHtml(m, false);
+  bindMessageHandlers(el);
+}
+
+function msgSig(m: Message): string {
+  return [
+    m.content?.length || 0,
+    m.thinking?.length || 0,
+    m.error || '',
+    m.activeVariant ?? -1,
+    m.variants?.length || 0,
+    m.attachments?.length || 0,
+  ].join('|');
+}
+
+function updateStreamingBody(el: HTMLElement, m: Message) {
+  // Initial scaffold if missing
+  if (!el.querySelector('.bubble')) {
+    el.innerHTML = messageInnerHtml(m, true);
+    bindMessageHandlers(el);
+  }
+  let body = el.querySelector<HTMLDivElement>('.stream-body');
+  if (!body) {
+    el.innerHTML = messageInnerHtml(m, true);
+    bindMessageHandlers(el);
+    body = el.querySelector('.stream-body');
+  }
+  if (body) body.textContent = m.content || '';
+
+  // Thinking block: ensure exists when needed, update text
+  if (m.thinking) {
+    let think = el.querySelector<HTMLDivElement>('.thinking');
+    if (!think) {
+      const bubble = el.querySelector('.bubble');
+      if (bubble) {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = `<div class="thinking-toggle">▾ Thoughts</div><div class="thinking"></div>`;
+        bubble.prepend(wrap.children[1]);
+        bubble.prepend(wrap.children[0]);
+      }
+      think = el.querySelector<HTMLDivElement>('.thinking');
+    }
+    if (think) think.textContent = m.thinking;
+  }
+}
+
+function messageInnerHtml(m: Message, isStreaming: boolean): string {
   const imageHtml = (m.attachments || []).filter(a => a.kind === 'image' && a.dataUrl)
     .map(a => `<img src="${a.dataUrl}" alt="${escHtml(a.name)}" />`).join('');
   const fileHtml = (m.attachments || []).filter(a => a.kind !== 'image')
@@ -255,24 +349,60 @@ function renderMessage(m: Message): string {
     ? `<div class="thinking-toggle">▾ Thoughts</div><div class="thinking">${escHtml(m.thinking)}</div>`
     : '';
 
-  const bodyHtml = m.role === 'assistant'
-    ? renderMarkdown(m.content || '')
-    : `<div>${escHtml(m.content || '').replace(/\n/g, '<br/>')}</div>`;
+  const bodyHtml = isStreaming
+    ? `<div class="stream-body" style="white-space:pre-wrap;">${escHtml(m.content || '')}</div>`
+    : (m.role === 'assistant'
+        ? renderMarkdown(m.content || '')
+        : `<div style="white-space:pre-wrap;">${escHtml(m.content || '')}</div>`);
 
-  const errHtml = m.error ? `<div style="color:var(--danger);font-size:12px;padding:6px 0;">⚠ ${escHtml(m.error)}</div>` : '';
+  const errHtml = m.error
+    ? `<div style="color:var(--danger);font-size:12px;padding:6px 0;">⚠ ${escHtml(m.error)}</div>`
+    : '';
 
-  return `
-    <div class="msg ${m.role}" data-id="${m.id}">
-      ${imageHtml ? `<div class="images">${imageHtml}</div>` : ''}
-      ${fileHtml ? `<div class="files">${fileHtml}</div>` : ''}
-      ${(m.content || m.thinking || m.error) ? `<div class="bubble">${thinkingHtml}${bodyHtml}${errHtml}</div>` : ''}
-      <div class="meta">
-        <button data-action="copy" data-mid="${m.id}">Copy</button>
-        <button data-action="delete" data-mid="${m.id}">Delete</button>
-        ${m.role === 'assistant' ? `<button data-action="regen" data-mid="${m.id}">Regenerate</button>` : ''}
-      </div>
+  const navigator = renderVariantNavigator(m);
+
+  const meta = `
+    <div class="meta">
+      ${m.role !== 'system' ? `<button data-action="edit" data-mid="${m.id}">Edit</button>` : ''}
+      <button data-action="copy" data-mid="${m.id}">Copy</button>
+      <button data-action="delete" data-mid="${m.id}">Delete</button>
+      ${m.role === 'assistant' ? `<button data-action="regen" data-mid="${m.id}">Regenerate</button>` : ''}
     </div>
   `;
+
+  return `
+    ${imageHtml ? `<div class="images">${imageHtml}</div>` : ''}
+    ${fileHtml ? `<div class="files">${fileHtml}</div>` : ''}
+    ${(m.content || m.thinking || m.error || isStreaming) ? `<div class="bubble">${thinkingHtml}${bodyHtml}${errHtml}</div>` : ''}
+    ${navigator}
+    ${meta}
+  `;
+}
+
+function renderVariantNavigator(m: Message): string {
+  if (!m.variants || m.variants.length < 2) return '';
+  const idx = (m.activeVariant ?? 0) + 1;
+  const tot = m.variants.length;
+  return `<div class="variant-nav">
+    <button data-action="prev-variant" data-mid="${m.id}" aria-label="Previous">‹</button>
+    <span>${idx} / ${tot}</span>
+    <button data-action="next-variant" data-mid="${m.id}" aria-label="Next">›</button>
+  </div>`;
+}
+
+function bindMessageHandlers(el: HTMLElement) {
+  el.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleMessageAction(btn.dataset.action!, btn.dataset.mid!);
+    });
+  });
+  el.querySelectorAll<HTMLDivElement>('.thinking-toggle').forEach(t => {
+    t.addEventListener('click', () => {
+      const next = t.nextElementSibling as HTMLElement | null;
+      if (next) next.classList.toggle('hidden');
+    });
+  });
 }
 
 async function handleMessageAction(action: string, mid: string) {
@@ -281,22 +411,70 @@ async function handleMessageAction(action: string, mid: string) {
   const msg = c.messages.find(m => m.id === mid);
   if (!msg) return;
   if (action === 'copy') {
-    try {
-      await navigator.clipboard.writeText(msg.content || '');
-      toast('Copied');
-    } catch { toast('Copy failed', 'error'); }
+    try { await navigator.clipboard.writeText(msg.content || ''); toast('Copied'); } catch { toast('Copy failed', 'error'); }
   } else if (action === 'delete') {
     c.messages = c.messages.filter(m => m.id !== mid);
+    msgNodes.get(mid)?.remove();
+    msgNodes.delete(mid);
     await store.saveCurrent();
+  } else if (action === 'edit') {
+    enterEditMode(msg);
   } else if (action === 'regen') {
-    // remove this assistant message and re-stream from prior history
-    const idx = c.messages.findIndex(m => m.id === mid);
-    if (idx > 0) {
-      c.messages.splice(idx);
-      await store.saveCurrent();
-      await streamAndAppend();
+    if (await store.forkForRegenerate(mid)) {
+      // Re-mount the now-empty assistant message before streaming
+      renderChat();
+      await streamAndAppend(mid);
     }
+  } else if (action === 'prev-variant') {
+    if (!msg.variants || msg.variants.length < 2) return;
+    const i = ((msg.activeVariant ?? 0) - 1 + msg.variants.length) % msg.variants.length;
+    await store.switchVariant(mid, i);
+    buzz();
+  } else if (action === 'next-variant') {
+    if (!msg.variants || msg.variants.length < 2) return;
+    const i = ((msg.activeVariant ?? 0) + 1) % msg.variants.length;
+    await store.switchVariant(mid, i);
+    buzz();
   }
+}
+
+function enterEditMode(m: Message) {
+  const el = msgNodes.get(m.id);
+  if (!el) return;
+  const bubble = el.querySelector('.bubble') as HTMLDivElement | null;
+  if (!bubble) return;
+  el.classList.add('editing');
+  bubble.innerHTML = `
+    <textarea class="edit-input">${escHtml(m.content || '')}</textarea>
+    <div class="edit-actions">
+      <button class="btn-secondary" data-edit-cancel>Cancel</button>
+      <button class="btn-primary" data-edit-save>${m.role === 'user' ? 'Save & resend' : 'Save'}</button>
+    </div>
+  `;
+  const ta = bubble.querySelector('textarea') as HTMLTextAreaElement;
+  ta.focus();
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 320) + 'px';
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 320) + 'px';
+  });
+  bubble.querySelector('[data-edit-cancel]')?.addEventListener('click', () => {
+    el.classList.remove('editing');
+    updateMessageEl(el, m);
+  });
+  bubble.querySelector('[data-edit-save]')?.addEventListener('click', async () => {
+    const newContent = ta.value;
+    el.classList.remove('editing');
+    if (m.role === 'user') {
+      await store.forkAtMessage(m.id, { content: newContent });
+      renderChat();
+      await streamAndAppend();
+    } else {
+      await store.forkAtMessage(m.id, { content: newContent });
+      renderChat();
+    }
+  });
 }
 
 // ─── Send / cancel ───
@@ -327,62 +505,101 @@ async function onSendOrCancel() {
   await streamAndAppend();
 }
 
-async function streamAndAppend() {
+async function streamAndAppend(reuseAssistantId?: string) {
   if (!store.current) return;
   const s = store.settings;
   if (!s.reverse_proxy || !s.proxy_password) {
     toast('Set the proxy URL + password in Settings first', 'error');
     return;
   }
-  const asstId = newId();
-  const asstMsg: Message = { id: asstId, role: 'assistant', content: '', createdAt: Date.now() };
-  store.current.messages.push(asstMsg);
-  await store.saveCurrent();
+
+  let asstId: string;
+  if (reuseAssistantId) {
+    asstId = reuseAssistantId;
+  } else {
+    asstId = newId();
+    const asstMsg: Message = { id: asstId, role: 'assistant', content: '', createdAt: Date.now() };
+    store.current.messages.push(asstMsg);
+    await store.saveCurrent();
+  }
 
   store.streaming = true;
+  streamingMsgId = asstId;
   updateSendBtn();
   abortCtrl = new AbortController();
 
   const systemPrompt = store.current.systemPromptOverride ?? store.settings.system_prompt ?? '';
+  const idx = store.current.messages.findIndex(m => m.id === asstId);
+  const historyForApi = idx === -1 ? store.current.messages : store.current.messages.slice(0, idx);
+
+  // Mount the message node before streaming kicks in
+  renderChat();
 
   let accText = '';
   let accThinking = '';
+
+  // Throttled DOM updates: at most one per animation frame
+  let dirty = false;
+  let raf: number | null = null;
+  const flush = () => {
+    raf = null;
+    if (!dirty) return;
+    dirty = false;
+    const el = msgNodes.get(asstId);
+    const i = store.current!.messages.findIndex(x => x.id === asstId);
+    if (i !== -1) {
+      store.current!.messages[i].content = accText;
+      store.current!.messages[i].thinking = accThinking || undefined;
+      if (el) updateStreamingBody(el, store.current!.messages[i]);
+    }
+    scrollToBottomSoon();
+  };
+  const requestFlush = () => {
+    dirty = true;
+    if (raf == null) raf = requestAnimationFrame(flush);
+  };
+
   await streamChat(
     s,
-    store.current.messages.slice(0, -1),
+    historyForApi,
     systemPrompt,
     {
-      onText: (delta) => {
-        accText += delta;
+      onText: (delta) => { accText += delta; requestFlush(); },
+      onThinking: (delta) => { accThinking += delta; requestFlush(); },
+      onDone: async () => {
+        // Final commit: swap streaming body for fully-rendered markdown.
+        const el = msgNodes.get(asstId);
         const i = store.current!.messages.findIndex(x => x.id === asstId);
         if (i !== -1) {
           store.current!.messages[i].content = accText;
-          renderChat();
+          store.current!.messages[i].thinking = accThinking || undefined;
         }
-      },
-      onThinking: (delta) => {
-        accThinking += delta;
-        const i = store.current!.messages.findIndex(x => x.id === asstId);
-        if (i !== -1) {
-          store.current!.messages[i].thinking = accThinking;
-          renderChat();
-        }
-      },
-      onDone: async () => {
         store.streaming = false;
+        streamingMsgId = null;
         abortCtrl = null;
+        if (el && i !== -1) {
+          el.innerHTML = messageInnerHtml(store.current!.messages[i], false);
+          bindMessageHandlers(el);
+        }
+        if (reuseAssistantId) {
+          await store.finalizeRegenVariant(asstId);
+        }
         updateSendBtn();
         await store.saveCurrent();
         buzz(4);
+        scrollToBottomSoon();
       },
       onError: async (err) => {
         store.streaming = false;
+        streamingMsgId = null;
         abortCtrl = null;
         const i = store.current!.messages.findIndex(x => x.id === asstId);
         if (i !== -1) {
+          store.current!.messages[i].content = accText;
           store.current!.messages[i].error = err.message;
         }
         updateSendBtn();
+        renderChat();
         await store.saveCurrent();
         toast('Error: ' + err.message, 'error');
       },

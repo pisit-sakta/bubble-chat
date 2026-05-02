@@ -77,14 +77,30 @@ export interface Attachment {
   text?: string;
 }
 
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
+export interface MessageVariant {
   content: string;
-  thinking?: string;             // captured if model returns reasoning content
+  thinking?: string;
   attachments?: Attachment[];
   createdAt: number;
   error?: string;
+  // Snapshot of all messages that came AFTER this variant in the conversation.
+  // Empty for the live variant. When switching to another variant, the live
+  // downstream gets archived here and the snapshot is restored.
+  downstreamSnapshot?: Message[];
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  // Live values — kept in sync with variants[activeVariant] when variants exists.
+  content: string;
+  thinking?: string;
+  attachments?: Attachment[];
+  createdAt: number;
+  error?: string;
+  // Branching: edit or regenerate pushes a new variant.
+  variants?: MessageVariant[];
+  activeVariant?: number;
 }
 
 export interface Conversation {

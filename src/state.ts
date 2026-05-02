@@ -98,6 +98,124 @@ class Store {
     await this.saveCurrent();
   }
 
+  // Edit a message's content: archive its current state + everything downstream
+  // as a variant on this message, then update content + truncate downstream.
+  async forkAtMessage(id: string, newPatch: Partial<Message>): Promise<number> {
+    if (!this.current) return -1;
+    const i = this.current.messages.findIndex(m => m.id === id);
+    if (i === -1) return -1;
+    const m = this.current.messages[i];
+    const downstream = this.current.messages.slice(i + 1).map(snapshotMessage);
+
+    if (!m.variants) m.variants = [];
+    // Capture current state as a variant (the "old" version).
+    m.variants.push({
+      content: m.content,
+      thinking: m.thinking,
+      attachments: m.attachments,
+      createdAt: m.createdAt,
+      error: m.error,
+      downstreamSnapshot: downstream,
+    });
+    // Apply the new (edit) patch as the new live state, with empty downstream snapshot.
+    m.variants.push({
+      content: newPatch.content ?? m.content,
+      thinking: newPatch.thinking ?? undefined,
+      attachments: newPatch.attachments ?? m.attachments,
+      createdAt: Date.now(),
+      error: undefined,
+      downstreamSnapshot: [],
+    });
+    m.activeVariant = m.variants.length - 1;
+    Object.assign(m, m.variants[m.activeVariant]);
+    delete (m as any).downstreamSnapshot;
+    // Truncate live conversation to this message
+    this.current.messages = this.current.messages.slice(0, i + 1);
+    this.current.updatedAt = Date.now();
+    await this.saveCurrent();
+    return i;
+  }
+
+  // Switch which variant of a message is active. Archives the current downstream,
+  // restores the picked variant's downstream snapshot.
+  async switchVariant(id: string, newIndex: number) {
+    if (!this.current) return;
+    const i = this.current.messages.findIndex(m => m.id === id);
+    if (i === -1) return;
+    const m = this.current.messages[i];
+    if (!m.variants || newIndex < 0 || newIndex >= m.variants.length) return;
+    const oldIndex = m.activeVariant ?? 0;
+    if (oldIndex === newIndex) return;
+    // Capture live downstream into the currently-active variant
+    const liveDownstream = this.current.messages.slice(i + 1).map(snapshotMessage);
+    m.variants[oldIndex] = {
+      ...m.variants[oldIndex],
+      content: m.content,
+      thinking: m.thinking,
+      attachments: m.attachments,
+      error: m.error,
+      downstreamSnapshot: liveDownstream,
+    };
+    // Switch in the picked variant
+    const v = m.variants[newIndex];
+    m.activeVariant = newIndex;
+    m.content = v.content;
+    m.thinking = v.thinking;
+    m.attachments = v.attachments;
+    m.error = v.error;
+    this.current.messages = [...this.current.messages.slice(0, i + 1), ...(v.downstreamSnapshot || []).map(restoreSnapshot)];
+    this.current.updatedAt = Date.now();
+    await this.saveCurrent();
+  }
+
+  // Regenerate: archive current assistant message + downstream as variant, drop
+  // the assistant message so a fresh stream produces a new sibling.
+  // Returns true if a fork was prepared.
+  async forkForRegenerate(id: string): Promise<boolean> {
+    if (!this.current) return false;
+    const i = this.current.messages.findIndex(m => m.id === id);
+    if (i === -1 || this.current.messages[i].role !== 'assistant') return false;
+    const m = this.current.messages[i];
+    const downstream = this.current.messages.slice(i + 1).map(snapshotMessage);
+    if (!m.variants) m.variants = [];
+    m.variants.push({
+      content: m.content,
+      thinking: m.thinking,
+      attachments: m.attachments,
+      createdAt: m.createdAt,
+      error: m.error,
+      downstreamSnapshot: downstream,
+    });
+    // Mark this message as "regen-pending" — content cleared, will be replaced.
+    m.activeVariant = m.variants.length;  // will become latest after streaming completes
+    m.content = '';
+    m.thinking = undefined;
+    m.error = undefined;
+    // Truncate downstream
+    this.current.messages = this.current.messages.slice(0, i + 1);
+    this.current.updatedAt = Date.now();
+    await this.saveCurrent();
+    return true;
+  }
+
+  // After a regen finishes, capture the current state into the activeVariant slot
+  async finalizeRegenVariant(id: string) {
+    if (!this.current) return;
+    const m = this.current.messages.find(m => m.id === id);
+    if (!m || !m.variants) return;
+    const idx = m.activeVariant ?? m.variants.length;
+    m.variants[idx] = {
+      content: m.content,
+      thinking: m.thinking,
+      attachments: m.attachments,
+      createdAt: m.createdAt,
+      error: m.error,
+      downstreamSnapshot: [],
+    };
+    m.activeVariant = idx;
+    await this.saveCurrent();
+  }
+
   async saveCurrent() {
     if (!this.current) return;
     await saveConversation(this.current);
@@ -105,6 +223,14 @@ class Store {
     this.conversations = await listConversations();
     this.emit();
   }
+}
+
+function snapshotMessage(m: Message): Message {
+  // Deep-ish clone for variant storage
+  return JSON.parse(JSON.stringify(m));
+}
+function restoreSnapshot(m: Message): Message {
+  return { ...m };
 }
 
 function cryptoRandom() {
