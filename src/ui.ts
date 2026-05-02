@@ -317,24 +317,39 @@ async function runCompact() {
   const beforeTokens = totalConversationTokens();
   toast('Compacting…');
 
-  // Build the compact prompt
-  const compactSystem = `You are a conversation summarizer. Produce a concise, information-dense summary of the conversation that follows. Preserve:
-• The user's goals, intent, and any open questions
-• Key decisions or conclusions
-• Important facts, code snippets, or exact values shared
-• The state of any ongoing tasks
-• Notable preferences or style requirements
-Output ONLY the summary as plain prose. Do not respond conversationally, do not greet, do not add commentary. The summary will replace the conversation history.`;
+  // Render the conversation as a single block of text inside a user message.
+  // This avoids "conversation must end with user" 400 errors from Claude.
+  const blocks: string[] = [];
+  if (store.current!.compactionSummary) {
+    blocks.push(`# Previous summary\n${store.current!.compactionSummary}`);
+  }
+  for (const m of store.current!.messages) {
+    if (m.role === 'system') continue;
+    blocks.push(`## ${m.role}\n${m.content || ''}`);
+  }
+  const conversationText = blocks.join('\n\n');
 
-  // Use the existing streamChat machinery with the compact_model + non-streaming
+  const compactPrompt = `Summarize the following conversation concisely but information-densely. Preserve:
+- The user's goals, intent, and any open questions
+- Key decisions or conclusions
+- Important facts, code snippets, or exact values shared
+- State of ongoing tasks
+- Notable preferences or style requirements
+
+Output ONLY the summary as plain prose. Do NOT greet, do NOT comment, do NOT respond conversationally — your output replaces the conversation history.
+
+<conversation>
+${conversationText}
+</conversation>`;
+
   const { streamChat } = await import('./api');
   let summary = '';
   try {
     await new Promise<void>((resolve, reject) => {
       streamChat(
         { ...store.settings, claude_model: s.compact_model, stream_openai: false, openai_max_tokens: 8000 },
-        store.current!.messages,
-        compactSystem,
+        [{ id: 'compact-input', role: 'user', content: compactPrompt, createdAt: Date.now() }],
+        '',
         {
           onText: (delta) => { summary += delta; },
           onDone: ({ text }) => { if (!summary && text) summary = text; resolve(); },
