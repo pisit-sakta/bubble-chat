@@ -727,49 +727,6 @@ function renderSettingsSheet() {
         ${field('Claude Model', null, selectControl('claude_model', s.claude_model, CLAUDE_MODELS))}
         ${field('Custom Model', 'Used when source = custom', textInput('custom_model', s.custom_model))}
         ${field('Custom URL', 'Used when source = custom', textInput('custom_url', s.custom_url, 'url'))}
-        ${rowField('Bypass Status Check', null, toggleControl('bypass_status_check', s.bypass_status_check))}
-        ${rowField('Show External Models', null, toggleControl('show_external_models', s.show_external_models))}
-      </div>
-    </div>
-
-    <div class="sect">
-      <h3>Sampling</h3>
-      <div class="group">
-        ${sliderField('temp_openai', 'Temperature', s.temp_openai, 0, 2, 0.01)}
-        ${sliderField('top_p_openai', 'Top P', s.top_p_openai, 0, 1, 0.01)}
-        ${sliderField('top_k_openai', 'Top K', s.top_k_openai, 0, 200, 1)}
-        ${sliderField('freq_pen_openai', 'Frequency Penalty', s.freq_pen_openai, -2, 2, 0.01)}
-        ${sliderField('pres_pen_openai', 'Presence Penalty', s.pres_pen_openai, -2, 2, 0.01)}
-        ${sliderField('repetition_penalty_openai', 'Repetition Penalty', s.repetition_penalty_openai, 0.5, 2, 0.01)}
-        ${sliderField('min_p_openai', 'Min P', s.min_p_openai, 0, 1, 0.001)}
-        ${sliderField('top_a_openai', 'Top A', s.top_a_openai, 0, 1, 0.001)}
-      </div>
-    </div>
-
-    <div class="sect">
-      <h3>Limits</h3>
-      <div class="group">
-        ${rowField('Max Response Tokens', null, numberInput('openai_max_tokens', s.openai_max_tokens))}
-        ${rowField('Max Context Tokens', null, numberInput('openai_max_context', s.openai_max_context))}
-        ${rowField('Max Context Unlocked', null, toggleControl('max_context_unlocked', s.max_context_unlocked))}
-        ${rowField('Seed', '-1 = random', numberInput('seed', s.seed))}
-        ${rowField('n (completions)', null, numberInput('n', s.n))}
-      </div>
-    </div>
-
-    <div class="sect">
-      <h3>Behavior</h3>
-      <div class="group">
-        ${rowField('Streaming', null, toggleControl('stream_openai', s.stream_openai))}
-        ${rowField('Reasoning Effort', null, selectControl('reasoning_effort', s.reasoning_effort, ['auto','low','medium','high']))}
-        ${rowField('Show Thoughts', null, toggleControl('show_thoughts', s.show_thoughts))}
-        ${rowField('Squash System Messages', null, toggleControl('squash_system_messages', s.squash_system_messages))}
-        ${rowField('Use System Prompt', null, toggleControl('use_sysprompt', s.use_sysprompt))}
-        ${rowField('Names Behavior', '0=none, 1=user only, 2=all', numberInput('names_behavior', s.names_behavior))}
-        ${rowField('Verbosity', null, selectControl('verbosity', s.verbosity, ['auto','low','medium','high']))}
-        ${rowField('Tool Reasoning Mode', null, selectControl('tool_reasoning_mode', s.tool_reasoning_mode, ['disabled','auto','always']))}
-        ${rowField('Function Calling', null, toggleControl('function_calling', s.function_calling))}
-        ${rowField('Web Search', null, toggleControl('enable_web_search', s.enable_web_search))}
       </div>
     </div>
 
@@ -788,26 +745,6 @@ function renderSettingsSheet() {
     </div>
 
     <div class="sect">
-      <h3>Other Prompts</h3>
-      <div class="group">
-        ${field('Assistant Prefill', null, textAreaInput('assistant_prefill', s.assistant_prefill, 3))}
-        ${field('Assistant Impersonation', null, textAreaInput('assistant_impersonation', s.assistant_impersonation, 3))}
-        ${rowField('Continue Prefill', null, toggleControl('continue_prefill', s.continue_prefill))}
-        ${field('Continue Postfix', null, textInput('continue_postfix', s.continue_postfix))}
-        ${field('Continue Nudge Prompt', null, textAreaInput('continue_nudge_prompt', s.continue_nudge_prompt, 2))}
-        ${field('New Chat Prompt', null, textAreaInput('new_chat_prompt', s.new_chat_prompt, 2))}
-        ${field('New Example Chat Prompt', null, textAreaInput('new_example_chat_prompt', s.new_example_chat_prompt, 2))}
-        ${field('New Group Chat Prompt', null, textAreaInput('new_group_chat_prompt', s.new_group_chat_prompt, 2))}
-        ${field('Impersonation Prompt', null, textAreaInput('impersonation_prompt', s.impersonation_prompt, 4))}
-        ${field('Group Nudge Prompt', null, textAreaInput('group_nudge_prompt', s.group_nudge_prompt, 2))}
-        ${field('Personality Format', null, textInput('personality_format', s.personality_format))}
-        ${field('Scenario Format', null, textInput('scenario_format', s.scenario_format))}
-        ${field('WI Format', null, textInput('wi_format', s.wi_format))}
-        ${field('Send if Empty', null, textInput('send_if_empty', s.send_if_empty))}
-      </div>
-    </div>
-
-    <div class="sect">
       <h3>SillyTavern Sync</h3>
       <div class="group">
         ${field('SillyTavern URL', null, textInput('st_url', s.st_url, 'url'))}
@@ -815,6 +752,73 @@ function renderSettingsSheet() {
         ${field('Basic Auth Password', null, textInput('st_basic_pass', s.st_basic_pass, 'password'))}
       </div>
     </div>
+
+    <details class="sect adv">
+      <summary><h3 style="display:inline;">Advanced</h3><span class="caret">▾</span></summary>
+
+      <div class="sub">
+        <h4>Sampling</h4>
+        <div class="group">
+          ${sliderField('temp_openai', 'Temperature', s.temp_openai, 0, 2, 0.01)}
+          ${sliderField('top_p_openai', 'Top P', s.top_p_openai, 0, 1, 0.01)}
+          ${sliderField('top_k_openai', 'Top K', s.top_k_openai, 0, 200, 1)}
+          ${sliderField('freq_pen_openai', 'Frequency Penalty', s.freq_pen_openai, -2, 2, 0.01)}
+          ${sliderField('pres_pen_openai', 'Presence Penalty', s.pres_pen_openai, -2, 2, 0.01)}
+          ${sliderField('repetition_penalty_openai', 'Repetition Penalty', s.repetition_penalty_openai, 0.5, 2, 0.01)}
+          ${sliderField('min_p_openai', 'Min P', s.min_p_openai, 0, 1, 0.001)}
+          ${sliderField('top_a_openai', 'Top A', s.top_a_openai, 0, 1, 0.001)}
+        </div>
+      </div>
+
+      <div class="sub">
+        <h4>Limits</h4>
+        <div class="group">
+          ${rowField('Max Response Tokens', null, numberInput('openai_max_tokens', s.openai_max_tokens))}
+          ${rowField('Max Context Tokens', null, numberInput('openai_max_context', s.openai_max_context))}
+          ${rowField('Max Context Unlocked', null, toggleControl('max_context_unlocked', s.max_context_unlocked))}
+          ${rowField('Seed', '-1 = random', numberInput('seed', s.seed))}
+          ${rowField('n (completions)', null, numberInput('n', s.n))}
+        </div>
+      </div>
+
+      <div class="sub">
+        <h4>Behavior</h4>
+        <div class="group">
+          ${rowField('Streaming', null, toggleControl('stream_openai', s.stream_openai))}
+          ${rowField('Reasoning Effort', null, selectControl('reasoning_effort', s.reasoning_effort, ['auto','low','medium','high']))}
+          ${rowField('Show Thoughts', null, toggleControl('show_thoughts', s.show_thoughts))}
+          ${rowField('Squash System Messages', null, toggleControl('squash_system_messages', s.squash_system_messages))}
+          ${rowField('Use System Prompt', null, toggleControl('use_sysprompt', s.use_sysprompt))}
+          ${rowField('Names Behavior', '0=none, 1=user only, 2=all', numberInput('names_behavior', s.names_behavior))}
+          ${rowField('Verbosity', null, selectControl('verbosity', s.verbosity, ['auto','low','medium','high']))}
+          ${rowField('Tool Reasoning Mode', null, selectControl('tool_reasoning_mode', s.tool_reasoning_mode, ['disabled','auto','always']))}
+          ${rowField('Function Calling', null, toggleControl('function_calling', s.function_calling))}
+          ${rowField('Web Search', null, toggleControl('enable_web_search', s.enable_web_search))}
+          ${rowField('Bypass Status Check', null, toggleControl('bypass_status_check', s.bypass_status_check))}
+          ${rowField('Show External Models', null, toggleControl('show_external_models', s.show_external_models))}
+        </div>
+      </div>
+
+      <div class="sub">
+        <h4>Other Prompts</h4>
+        <div class="group">
+          ${field('Assistant Prefill', null, textAreaInput('assistant_prefill', s.assistant_prefill, 3))}
+          ${field('Assistant Impersonation', null, textAreaInput('assistant_impersonation', s.assistant_impersonation, 3))}
+          ${rowField('Continue Prefill', null, toggleControl('continue_prefill', s.continue_prefill))}
+          ${field('Continue Postfix', null, textInput('continue_postfix', s.continue_postfix))}
+          ${field('Continue Nudge Prompt', null, textAreaInput('continue_nudge_prompt', s.continue_nudge_prompt, 2))}
+          ${field('New Chat Prompt', null, textAreaInput('new_chat_prompt', s.new_chat_prompt, 2))}
+          ${field('New Example Chat Prompt', null, textAreaInput('new_example_chat_prompt', s.new_example_chat_prompt, 2))}
+          ${field('New Group Chat Prompt', null, textAreaInput('new_group_chat_prompt', s.new_group_chat_prompt, 2))}
+          ${field('Impersonation Prompt', null, textAreaInput('impersonation_prompt', s.impersonation_prompt, 4))}
+          ${field('Group Nudge Prompt', null, textAreaInput('group_nudge_prompt', s.group_nudge_prompt, 2))}
+          ${field('Personality Format', null, textInput('personality_format', s.personality_format))}
+          ${field('Scenario Format', null, textInput('scenario_format', s.scenario_format))}
+          ${field('WI Format', null, textInput('wi_format', s.wi_format))}
+          ${field('Send if Empty', null, textInput('send_if_empty', s.send_if_empty))}
+        </div>
+      </div>
+    </details>
 
     <div class="sect" style="text-align:center;color:var(--text-faint);font-size:11px;padding:12px 0 0;">
       Bubble · settings stored locally in your browser
