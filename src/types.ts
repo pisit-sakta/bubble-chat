@@ -45,6 +45,13 @@ export interface Settings {
 
   // ── Prompts ──
   system_prompt: string;          // Bubble-specific: system message used by default
+  system_prompt_enabled: boolean;
+  userstyle1_name: string;
+  userstyle1: string;
+  userstyle1_enabled: boolean;
+  userstyle2_name: string;
+  userstyle2: string;
+  userstyle2_enabled: boolean;
   assistant_prefill: string;
   assistant_impersonation: string;
   continue_prefill: boolean;

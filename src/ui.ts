@@ -48,6 +48,7 @@ export function mount(root: HTMLElement) {
       <main class="chat-scroll" id="chat"></main>
 
       <footer class="composer">
+        <div class="prompt-chips" id="prompt-chips"></div>
         <div class="attachments" id="attachments"></div>
         <div class="row">
           <button class="icon-btn" id="btn-attach" aria-label="Attach">+</button>
@@ -110,6 +111,7 @@ export function mount(root: HTMLElement) {
     renderModelLabel();
     renderConvList();
     renderChat();
+    renderPromptChips();
     updateSendBtn();
   });
 
@@ -117,6 +119,7 @@ export function mount(root: HTMLElement) {
   renderModelLabel();
   renderConvList();
   renderChat();
+  renderPromptChips();
   updateSendBtn();
 
   // Welcome / bootstrap nudge
@@ -160,6 +163,40 @@ function renderModelLabel() {
   if (!el) return;
   const m = store.current?.model || store.settings.claude_model;
   el.textContent = m;
+}
+
+// ─── Prompt chips (1 system + 2 userstyle, toggleable inline) ───
+function renderPromptChips() {
+  const root = $<HTMLDivElement>('#prompt-chips');
+  if (!root) return;
+  const s = store.settings;
+  const chips = [
+    { key: 'system_prompt' as const, name: 'System', body: s.system_prompt, on: s.system_prompt_enabled, enabledKey: 'system_prompt_enabled' as const },
+    { key: 'userstyle1' as const, name: s.userstyle1_name || 'Style 1', body: s.userstyle1, on: s.userstyle1_enabled, enabledKey: 'userstyle1_enabled' as const },
+    { key: 'userstyle2' as const, name: s.userstyle2_name || 'Style 2', body: s.userstyle2, on: s.userstyle2_enabled, enabledKey: 'userstyle2_enabled' as const },
+  ];
+  root.innerHTML = chips.map(c => {
+    const empty = !c.body || !c.body.trim();
+    return `<button class="chip ${c.on ? 'on' : ''} ${empty ? 'empty' : ''}" data-toggle-prompt="${c.enabledKey}" title="${c.on ? 'On — tap to disable' : 'Off — tap to enable'}">${escHtml(c.name)}</button>`;
+  }).join('');
+  root.querySelectorAll<HTMLButtonElement>('[data-toggle-prompt]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.togglePrompt!;
+      const next = !((store.settings as any)[key]);
+      await store.updateSettings({ [key]: next } as any);
+      buzz();
+    });
+  });
+}
+
+// ─── Effective system prompt ───
+function effectiveSystemPrompt(): string {
+  const s = store.settings;
+  const parts: string[] = [];
+  if (s.system_prompt_enabled && s.system_prompt?.trim()) parts.push(s.system_prompt.trim());
+  if (s.userstyle1_enabled && s.userstyle1?.trim()) parts.push(s.userstyle1.trim());
+  if (s.userstyle2_enabled && s.userstyle2?.trim()) parts.push(s.userstyle2.trim());
+  return parts.join('\n\n');
 }
 
 // ─── Drawer ───
@@ -528,7 +565,7 @@ async function streamAndAppend(reuseAssistantId?: string) {
   updateSendBtn();
   abortCtrl = new AbortController();
 
-  const systemPrompt = store.current.systemPromptOverride ?? store.settings.system_prompt ?? '';
+  const systemPrompt = store.current.systemPromptOverride ?? effectiveSystemPrompt();
   const idx = store.current.messages.findIndex(m => m.id === asstId);
   const historyForApi = idx === -1 ? store.current.messages : store.current.messages.slice(0, idx);
 
@@ -737,9 +774,22 @@ function renderSettingsSheet() {
     </div>
 
     <div class="sect">
-      <h3>Prompts</h3>
+      <h3>Active Prompts</h3>
       <div class="group">
-        ${field('System Prompt', 'Used as default for new conversations', textAreaInput('system_prompt', s.system_prompt, 6))}
+        ${rowField('System Prompt — On', 'Toggle inline above the composer too', toggleControl('system_prompt_enabled', s.system_prompt_enabled))}
+        ${field('System Prompt body', null, textAreaInput('system_prompt', s.system_prompt, 6))}
+        ${rowField('Userstyle 1 — On', null, toggleControl('userstyle1_enabled', s.userstyle1_enabled))}
+        ${field('Userstyle 1 name', null, textInput('userstyle1_name', s.userstyle1_name))}
+        ${field('Userstyle 1 body', null, textAreaInput('userstyle1', s.userstyle1, 5))}
+        ${rowField('Userstyle 2 — On', null, toggleControl('userstyle2_enabled', s.userstyle2_enabled))}
+        ${field('Userstyle 2 name', null, textInput('userstyle2_name', s.userstyle2_name))}
+        ${field('Userstyle 2 body', null, textAreaInput('userstyle2', s.userstyle2, 5))}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>Other Prompts</h3>
+      <div class="group">
         ${field('Assistant Prefill', null, textAreaInput('assistant_prefill', s.assistant_prefill, 3))}
         ${field('Assistant Impersonation', null, textAreaInput('assistant_impersonation', s.assistant_impersonation, 3))}
         ${rowField('Continue Prefill', null, toggleControl('continue_prefill', s.continue_prefill))}

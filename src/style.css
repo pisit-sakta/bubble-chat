@@ -184,6 +184,36 @@ a { color: var(--accent); text-decoration: none; }
   background: var(--bg);
 }
 
+.composer .prompt-chips {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.composer .prompt-chips:empty { display: none; }
+.composer .prompt-chips .chip {
+  font-size: 11px; padding: 4px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-faint);
+  background: var(--bg-elev);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.12s var(--ease);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.composer .prompt-chips .chip:active { transform: scale(0.94); }
+.composer .prompt-chips .chip.empty { opacity: 0.45; }
+.composer .prompt-chips .chip.on {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  opacity: 1;
+}
+.composer .prompt-chips .chip.empty.on {
+  background: rgba(217,119,87,0.45);
+  border-color: rgba(217,119,87,0.6);
+}
+
 .composer .attachments { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .composer .attachments:empty { display: none; }
 .composer .attachments .att {

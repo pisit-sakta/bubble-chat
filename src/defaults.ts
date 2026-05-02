@@ -44,6 +44,13 @@ export const DEFAULT_SETTINGS: Settings = {
 
   // Prompts
   system_prompt: '',
+  system_prompt_enabled: false,
+  userstyle1_name: 'Style 1',
+  userstyle1: '',
+  userstyle1_enabled: false,
+  userstyle2_name: 'Style 2',
+  userstyle2: '',
+  userstyle2_enabled: false,
   assistant_prefill: '',
   assistant_impersonation: '',
   continue_prefill: false,
