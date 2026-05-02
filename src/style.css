@@ -422,14 +422,18 @@ details.adv .sub h4 {
   position: fixed; left: 50%; bottom: calc(100px + var(--safe-bot));
   transform: translate(-50%, 12px);
   background: var(--bg-elev-2); border: 1px solid var(--border-strong); color: var(--text);
-  padding: 10px 16px; border-radius: 22px; font-size: 13px;
+  padding: 10px 16px; border-radius: 18px; font-size: 13px;
   z-index: 200; opacity: 0; pointer-events: none;
   transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
-  white-space: nowrap; max-width: 90vw;
-  overflow: hidden; text-overflow: ellipsis;
+  max-width: 90vw;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+  text-align: left;
 }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 .toast.error { border-color: var(--danger); }
+.toast.error.long { max-height: 60vh; overflow-y: auto; cursor: text; }
 
 /* variant navigator */
 .variant-nav {

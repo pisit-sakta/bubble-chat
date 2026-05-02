@@ -19,11 +19,14 @@ function toast(msg: string, kind: 'info' | 'error' = 'info') {
     el = document.createElement('div');
     el.className = 'toast';
     document.body.appendChild(el);
+    el.addEventListener('click', () => el!.classList.remove('show'));
   }
   el.textContent = msg;
-  el.className = 'toast' + (kind === 'error' ? ' error' : '') + ' show';
+  const long = msg.length > 80;
+  el.className = 'toast' + (kind === 'error' ? ' error' : '') + (long ? ' long' : '') + ' show';
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el!.classList.remove('show'), 2800);
+  // Errors stay until tapped or until 12s; info auto-dismisses fast
+  toastTimer = window.setTimeout(() => el!.classList.remove('show'), kind === 'error' ? 12000 : 2800);
 }
 
 function buzz(ms = 8) {
@@ -341,7 +344,13 @@ Output ONLY the summary as plain prose. Do not respond conversationally, do not 
     });
   } catch (e) {
     compacting = false;
-    toast(`Compact failed: ${(e as Error).message}`, 'error');
+    const err = (e as Error).message || String(e);
+    console.error('Compact failed:', e);
+    // Surface a hint when the model name looks like the culprit
+    const hint = /model|404|invalid_request_error/i.test(err)
+      ? `\n\nHint: your proxy may not recognize "${s.compact_model}". Try setting a different "Compact model" in Settings → Advanced (or sync from SillyTavern).`
+      : '';
+    toast(`Compact failed (tap to dismiss):\n${err}${hint}`, 'error');
     return;
   }
 
@@ -954,7 +963,9 @@ function renderSettingsSheet() {
         ${field('Chat Completion Source', null, selectControl('chat_completion_source', s.chat_completion_source, ['claude','openai','custom']))}
         ${field('Reverse Proxy URL', '/chat/completions appended automatically', textInput('reverse_proxy', s.reverse_proxy, 'url'))}
         ${field('Proxy Password', 'Sent as Bearer token', textInput('proxy_password', s.proxy_password, 'password'))}
-        ${field('Claude Model', null, selectControl('claude_model', s.claude_model, CLAUDE_MODELS))}
+        ${field('Claude Model (primary)', null, selectControl('claude_model', s.claude_model, CLAUDE_MODELS))}
+        ${field('Claude Model (alt)', 'Quick-swap target in the topbar popover', selectControl('claude_alt_model', s.claude_alt_model, CLAUDE_MODELS))}
+        ${field('Compact Model', 'Used by /compact (long context recommended)', selectControl('compact_model', s.compact_model, CLAUDE_MODELS))}
         ${field('Custom Model', 'Used when source = custom', textInput('custom_model', s.custom_model))}
         ${field('Custom URL', 'Used when source = custom', textInput('custom_url', s.custom_url, 'url'))}
       </div>
