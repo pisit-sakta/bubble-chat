@@ -1,0 +1,610 @@
+import { store, newId } from './state';
+import { streamChat, fetchSettingsFromST } from './api';
+import { fileToAttachment, formatBytes } from './attach';
+import { renderMarkdown } from './markdown';
+import { CLAUDE_MODELS } from './defaults';
+import type { Attachment, Message, Settings } from './types';
+
+// ─── Helpers ───
+const $ = <T extends Element>(s: string, root: ParentNode = document) => root.querySelector(s) as T | null;
+const escHtml = (s: string) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+
+let pendingAttachments: Attachment[] = [];
+let abortCtrl: AbortController | null = null;
+
+let toastTimer: number | null = null;
+function toast(msg: string, kind: 'info' | 'error' = 'info') {
+  let el = $('.toast') as HTMLDivElement | null;
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.className = 'toast' + (kind === 'error' ? ' error' : '') + ' show';
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => el!.classList.remove('show'), 2800);
+}
+
+function buzz(ms = 8) {
+  if ('vibrate' in navigator) {
+    try { (navigator as any).vibrate(ms); } catch {}
+  }
+}
+
+// ─── Top-level render ───
+export function mount(root: HTMLElement) {
+  root.innerHTML = `
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="icon-btn" id="btn-menu" aria-label="Conversations">☰</button>
+        <div class="title">
+          <div class="name">Bubble</div>
+          <div class="model" id="model-label"></div>
+        </div>
+        <button class="icon-btn" id="btn-settings" aria-label="Settings">⚙</button>
+      </header>
+
+      <main class="chat-scroll" id="chat"></main>
+
+      <footer class="composer">
+        <div class="attachments" id="attachments"></div>
+        <div class="row">
+          <button class="icon-btn" id="btn-attach" aria-label="Attach">+</button>
+          <input type="file" id="file-input" multiple accept="image/*,.pdf,.md,.markdown,.txt,.json,.js,.ts,.tsx,.jsx,.py,.go,.rs,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.toml,.sh,.log,text/*" hidden />
+          <textarea id="composer-input" rows="1" placeholder="Message..." autocapitalize="sentences"></textarea>
+          <button class="icon-btn send-btn" id="btn-send" aria-label="Send">↑</button>
+        </div>
+      </footer>
+    </div>
+
+    <div class="scrim" id="scrim"></div>
+
+    <aside class="drawer" id="drawer">
+      <div class="head">
+        <button class="new-btn" id="btn-new">＋ &nbsp;New chat</button>
+        <button class="icon-btn" id="btn-close-drawer" aria-label="Close">✕</button>
+      </div>
+      <div class="conv-list" id="conv-list"></div>
+    </aside>
+
+    <section class="sheet" id="sheet">
+      <div class="head">
+        <button class="icon-btn" id="btn-close-sheet" aria-label="Close">✕</button>
+        <h2>Settings</h2>
+        <button class="btn-secondary" id="btn-resync">Sync from ST</button>
+      </div>
+      <div class="sheet-body" id="sheet-body"></div>
+    </section>
+  `;
+
+  // bindings
+  $<HTMLButtonElement>('#btn-menu')!.addEventListener('click', () => toggleDrawer(true));
+  $<HTMLButtonElement>('#btn-close-drawer')!.addEventListener('click', () => toggleDrawer(false));
+  $<HTMLButtonElement>('#btn-settings')!.addEventListener('click', () => { renderSettingsSheet(); toggleSheet(true); });
+  $<HTMLButtonElement>('#btn-close-sheet')!.addEventListener('click', () => toggleSheet(false));
+  $<HTMLButtonElement>('#scrim')!.addEventListener('click', () => { toggleDrawer(false); toggleSheet(false); });
+  $<HTMLButtonElement>('#btn-new')!.addEventListener('click', async () => {
+    await store.newConversation();
+    toggleDrawer(false);
+    renderChat();
+    focusComposer();
+  });
+  $<HTMLButtonElement>('#btn-attach')!.addEventListener('click', () => $<HTMLInputElement>('#file-input')!.click());
+  $<HTMLInputElement>('#file-input')!.addEventListener('change', onFilesPicked);
+  $<HTMLButtonElement>('#btn-send')!.addEventListener('click', onSendOrCancel);
+  $<HTMLButtonElement>('#btn-resync')!.addEventListener('click', resyncFromST);
+
+  const ta = $<HTMLTextAreaElement>('#composer-input')!;
+  ta.addEventListener('input', () => { autoGrow(ta); updateSendBtn(); });
+  ta.addEventListener('keydown', (e) => {
+    // Enter (no shift): send. Mobile: Enter = newline (default), so only desktop should send.
+    if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
+      e.preventDefault();
+      onSendOrCancel();
+    }
+  });
+
+  // Subscribe to store updates
+  store.subscribe(() => {
+    renderModelLabel();
+    renderConvList();
+    renderChat();
+    updateSendBtn();
+  });
+
+  // Initial render
+  renderModelLabel();
+  renderConvList();
+  renderChat();
+  updateSendBtn();
+
+  // Welcome / bootstrap nudge
+  if (!store.settings.proxy_password) {
+    setTimeout(() => toast('Open Settings → fill in proxy URL & password', 'info'), 800);
+  }
+}
+
+function isMobile() {
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+}
+
+function autoGrow(ta: HTMLTextAreaElement) {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
+}
+
+function focusComposer() {
+  const ta = $<HTMLTextAreaElement>('#composer-input');
+  ta?.focus();
+}
+
+function updateSendBtn() {
+  const btn = $<HTMLButtonElement>('#btn-send')!;
+  const ta = $<HTMLTextAreaElement>('#composer-input')!;
+  const hasContent = ta.value.trim().length > 0 || pendingAttachments.length > 0;
+  if (store.streaming) {
+    btn.classList.add('streaming', 'active');
+    btn.textContent = '■';
+    btn.setAttribute('aria-label', 'Stop');
+    return;
+  }
+  btn.textContent = '↑';
+  btn.setAttribute('aria-label', 'Send');
+  btn.classList.remove('streaming');
+  btn.classList.toggle('active', hasContent);
+}
+
+function renderModelLabel() {
+  const el = $<HTMLDivElement>('#model-label');
+  if (!el) return;
+  const m = store.current?.model || store.settings.claude_model;
+  el.textContent = m;
+}
+
+// ─── Drawer ───
+function toggleDrawer(open: boolean) {
+  const d = $('#drawer')!;
+  const s = $('#scrim')!;
+  d.classList.toggle('open', open);
+  s.classList.toggle('open', open);
+}
+
+function renderConvList() {
+  const list = $<HTMLDivElement>('#conv-list');
+  if (!list) return;
+  if (!store.conversations.length) {
+    list.innerHTML = `<div style="padding:14px;color:var(--text-faint);font-size:13px;text-align:center;">No conversations yet.</div>`;
+    return;
+  }
+  list.innerHTML = store.conversations.map(c => `
+    <div class="conv-item ${store.current?.id === c.id ? 'active' : ''}" data-id="${c.id}">
+      <div class="row">
+        <div class="name">${escHtml(c.title || 'Untitled')}</div>
+        <button class="delete" data-del="${c.id}" aria-label="Delete">✕</button>
+      </div>
+      <div class="preview">${escHtml(lastMessagePreview(c.messages))}</div>
+    </div>
+  `).join('');
+  list.querySelectorAll<HTMLDivElement>('.conv-item').forEach(it => {
+    it.addEventListener('click', async (e) => {
+      const tgt = e.target as HTMLElement;
+      if (tgt.dataset.del) {
+        e.stopPropagation();
+        if (confirm('Delete this conversation?')) await store.deleteCurrentConversation(tgt.dataset.del);
+        return;
+      }
+      const id = it.dataset.id!;
+      await store.selectConversation(id);
+      toggleDrawer(false);
+    });
+  });
+}
+
+function lastMessagePreview(msgs: Message[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].content) return msgs[i].content.slice(0, 80);
+  }
+  return '';
+}
+
+// ─── Chat view ───
+function renderChat() {
+  const root = $<HTMLDivElement>('#chat');
+  if (!root) return;
+  const c = store.current;
+  if (!c || !c.messages.length) {
+    root.innerHTML = `
+      <div class="chat-empty">
+        <div>
+          <div class="logo">🫧</div>
+          <div class="title">Start a conversation</div>
+          <div class="sub">Anything goes — code, debugging, prose, weird hypotheticals</div>
+        </div>
+      </div>`;
+    return;
+  }
+  root.innerHTML = c.messages.map(renderMessage).join('');
+  // attach copy/delete handlers
+  root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action!;
+      const mid = btn.dataset.mid!;
+      handleMessageAction(action, mid);
+    });
+  });
+  // thinking toggle
+  root.querySelectorAll<HTMLDivElement>('.thinking-toggle').forEach(t => {
+    t.addEventListener('click', () => {
+      const next = t.nextElementSibling as HTMLElement | null;
+      if (next) next.classList.toggle('hidden');
+    });
+  });
+  // scroll to bottom
+  root.scrollTop = root.scrollHeight;
+}
+
+function renderMessage(m: Message): string {
+  const imageHtml = (m.attachments || []).filter(a => a.kind === 'image' && a.dataUrl)
+    .map(a => `<img src="${a.dataUrl}" alt="${escHtml(a.name)}" />`).join('');
+  const fileHtml = (m.attachments || []).filter(a => a.kind !== 'image')
+    .map(a => `<div class="file-chip"><span>📎</span><span class="name">${escHtml(a.name)}</span><span class="size">${formatBytes(a.size)}</span></div>`).join('');
+
+  const thinkingHtml = m.thinking
+    ? `<div class="thinking-toggle">▾ Thoughts</div><div class="thinking">${escHtml(m.thinking)}</div>`
+    : '';
+
+  const bodyHtml = m.role === 'assistant'
+    ? renderMarkdown(m.content || '')
+    : `<div>${escHtml(m.content || '').replace(/\n/g, '<br/>')}</div>`;
+
+  const errHtml = m.error ? `<div style="color:var(--danger);font-size:12px;padding:6px 0;">⚠ ${escHtml(m.error)}</div>` : '';
+
+  return `
+    <div class="msg ${m.role}" data-id="${m.id}">
+      ${imageHtml ? `<div class="images">${imageHtml}</div>` : ''}
+      ${fileHtml ? `<div class="files">${fileHtml}</div>` : ''}
+      ${(m.content || m.thinking || m.error) ? `<div class="bubble">${thinkingHtml}${bodyHtml}${errHtml}</div>` : ''}
+      <div class="meta">
+        <button data-action="copy" data-mid="${m.id}">Copy</button>
+        <button data-action="delete" data-mid="${m.id}">Delete</button>
+        ${m.role === 'assistant' ? `<button data-action="regen" data-mid="${m.id}">Regenerate</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+async function handleMessageAction(action: string, mid: string) {
+  const c = store.current;
+  if (!c) return;
+  const msg = c.messages.find(m => m.id === mid);
+  if (!msg) return;
+  if (action === 'copy') {
+    try {
+      await navigator.clipboard.writeText(msg.content || '');
+      toast('Copied');
+    } catch { toast('Copy failed', 'error'); }
+  } else if (action === 'delete') {
+    c.messages = c.messages.filter(m => m.id !== mid);
+    await store.saveCurrent();
+  } else if (action === 'regen') {
+    // remove this assistant message and re-stream from prior history
+    const idx = c.messages.findIndex(m => m.id === mid);
+    if (idx > 0) {
+      c.messages.splice(idx);
+      await store.saveCurrent();
+      await streamAndAppend();
+    }
+  }
+}
+
+// ─── Send / cancel ───
+async function onSendOrCancel() {
+  if (store.streaming) {
+    abortCtrl?.abort();
+    return;
+  }
+  const ta = $<HTMLTextAreaElement>('#composer-input')!;
+  const text = ta.value.trim();
+  if (!text && pendingAttachments.length === 0) return;
+
+  const userMsg: Message = {
+    id: newId(),
+    role: 'user',
+    content: text,
+    attachments: pendingAttachments.length ? pendingAttachments : undefined,
+    createdAt: Date.now(),
+  };
+  ta.value = '';
+  autoGrow(ta);
+  pendingAttachments = [];
+  renderAttachments();
+
+  if (!store.current) await store.newConversation();
+  await store.appendMessage(userMsg);
+  buzz();
+  await streamAndAppend();
+}
+
+async function streamAndAppend() {
+  if (!store.current) return;
+  const s = store.settings;
+  if (!s.reverse_proxy || !s.proxy_password) {
+    toast('Set the proxy URL + password in Settings first', 'error');
+    return;
+  }
+  const asstId = newId();
+  const asstMsg: Message = { id: asstId, role: 'assistant', content: '', createdAt: Date.now() };
+  store.current.messages.push(asstMsg);
+  await store.saveCurrent();
+
+  store.streaming = true;
+  updateSendBtn();
+  abortCtrl = new AbortController();
+
+  const systemPrompt = store.current.systemPromptOverride ?? store.settings.system_prompt ?? '';
+
+  let accText = '';
+  let accThinking = '';
+  await streamChat(
+    s,
+    store.current.messages.slice(0, -1),
+    systemPrompt,
+    {
+      onText: (delta) => {
+        accText += delta;
+        const i = store.current!.messages.findIndex(x => x.id === asstId);
+        if (i !== -1) {
+          store.current!.messages[i].content = accText;
+          renderChat();
+        }
+      },
+      onThinking: (delta) => {
+        accThinking += delta;
+        const i = store.current!.messages.findIndex(x => x.id === asstId);
+        if (i !== -1) {
+          store.current!.messages[i].thinking = accThinking;
+          renderChat();
+        }
+      },
+      onDone: async () => {
+        store.streaming = false;
+        abortCtrl = null;
+        updateSendBtn();
+        await store.saveCurrent();
+        buzz(4);
+      },
+      onError: async (err) => {
+        store.streaming = false;
+        abortCtrl = null;
+        const i = store.current!.messages.findIndex(x => x.id === asstId);
+        if (i !== -1) {
+          store.current!.messages[i].error = err.message;
+        }
+        updateSendBtn();
+        await store.saveCurrent();
+        toast('Error: ' + err.message, 'error');
+      },
+    },
+    abortCtrl.signal,
+  );
+}
+
+// ─── Attachments ───
+async function onFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = '';
+  if (!files.length) return;
+  for (const f of files) {
+    try {
+      const att = await fileToAttachment(f);
+      pendingAttachments.push(att);
+    } catch (e) {
+      toast(`Couldn't attach ${f.name}: ${(e as Error).message}`, 'error');
+    }
+  }
+  renderAttachments();
+  updateSendBtn();
+}
+
+function renderAttachments() {
+  const root = $<HTMLDivElement>('#attachments')!;
+  root.innerHTML = pendingAttachments.map(a => {
+    if (a.kind === 'image' && a.dataUrl) {
+      return `<div class="att" data-id="${a.id}"><img src="${a.dataUrl}" alt=""><span class="x" data-x="${a.id}">✕</span></div>`;
+    }
+    const icon = a.kind === 'pdf' ? '📕' : '📄';
+    return `<div class="att" data-id="${a.id}">${icon}<span class="lbl">${escHtml(a.name)}</span><span class="x" data-x="${a.id}">✕</span></div>`;
+  }).join('');
+  root.querySelectorAll<HTMLSpanElement>('[data-x]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = el.dataset.x!;
+      pendingAttachments = pendingAttachments.filter(a => a.id !== id);
+      renderAttachments();
+      updateSendBtn();
+    });
+  });
+}
+
+// ─── Sheet / settings ───
+function toggleSheet(open: boolean) {
+  $('#sheet')!.classList.toggle('open', open);
+  $('#scrim')!.classList.toggle('open', open);
+}
+
+function field(label: string, desc: string | null, control: string) {
+  return `<div class="field"><label>${escHtml(label)}</label>${desc ? `<div class="desc">${escHtml(desc)}</div>` : ''}${control}</div>`;
+}
+function rowField(label: string, desc: string | null, control: string) {
+  return `<div class="field row"><div class="col"><label>${escHtml(label)}</label>${desc ? `<div class="desc">${escHtml(desc)}</div>` : ''}</div>${control}</div>`;
+}
+function sliderField(key: string, label: string, value: number, min: number, max: number, step: number) {
+  return `<div class="slider-field"><div class="top"><label>${escHtml(label)}</label><span class="val" data-val-for="${key}">${value}</span></div><input type="range" data-bind="${key}" min="${min}" max="${max}" step="${step}" value="${value}" /></div>`;
+}
+function toggleControl(key: string, on: boolean) {
+  return `<div class="toggle ${on ? 'on' : ''}" data-toggle="${key}"></div>`;
+}
+function selectControl(key: string, value: string, options: string[]) {
+  return `<select data-bind="${key}">${options.map(o => `<option value="${escHtml(o)}" ${o === value ? 'selected' : ''}>${escHtml(o)}</option>`).join('')}</select>`;
+}
+function textInput(key: string, value: string, type = 'text') {
+  return `<input type="${type}" data-bind="${key}" value="${escHtml(String(value ?? ''))}" />`;
+}
+function numberInput(key: string, value: number) {
+  return `<input type="number" data-bind="${key}" value="${value}" />`;
+}
+function textAreaInput(key: string, value: string, rows = 4) {
+  return `<textarea data-bind="${key}" rows="${rows}">${escHtml(String(value ?? ''))}</textarea>`;
+}
+
+function renderSettingsSheet() {
+  const body = $<HTMLDivElement>('#sheet-body')!;
+  const s = store.settings;
+  body.innerHTML = `
+    <div class="sect">
+      <h3>API Connections</h3>
+      <div class="group">
+        ${field('Chat Completion Source', null, selectControl('chat_completion_source', s.chat_completion_source, ['claude','openai','custom']))}
+        ${field('Reverse Proxy URL', '/chat/completions appended automatically', textInput('reverse_proxy', s.reverse_proxy, 'url'))}
+        ${field('Proxy Password', 'Sent as Bearer token', textInput('proxy_password', s.proxy_password, 'password'))}
+        ${field('Claude Model', null, selectControl('claude_model', s.claude_model, CLAUDE_MODELS))}
+        ${field('Custom Model', 'Used when source = custom', textInput('custom_model', s.custom_model))}
+        ${field('Custom URL', 'Used when source = custom', textInput('custom_url', s.custom_url, 'url'))}
+        ${rowField('Bypass Status Check', null, toggleControl('bypass_status_check', s.bypass_status_check))}
+        ${rowField('Show External Models', null, toggleControl('show_external_models', s.show_external_models))}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>Sampling</h3>
+      <div class="group">
+        ${sliderField('temp_openai', 'Temperature', s.temp_openai, 0, 2, 0.01)}
+        ${sliderField('top_p_openai', 'Top P', s.top_p_openai, 0, 1, 0.01)}
+        ${sliderField('top_k_openai', 'Top K', s.top_k_openai, 0, 200, 1)}
+        ${sliderField('freq_pen_openai', 'Frequency Penalty', s.freq_pen_openai, -2, 2, 0.01)}
+        ${sliderField('pres_pen_openai', 'Presence Penalty', s.pres_pen_openai, -2, 2, 0.01)}
+        ${sliderField('repetition_penalty_openai', 'Repetition Penalty', s.repetition_penalty_openai, 0.5, 2, 0.01)}
+        ${sliderField('min_p_openai', 'Min P', s.min_p_openai, 0, 1, 0.001)}
+        ${sliderField('top_a_openai', 'Top A', s.top_a_openai, 0, 1, 0.001)}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>Limits</h3>
+      <div class="group">
+        ${rowField('Max Response Tokens', null, numberInput('openai_max_tokens', s.openai_max_tokens))}
+        ${rowField('Max Context Tokens', null, numberInput('openai_max_context', s.openai_max_context))}
+        ${rowField('Max Context Unlocked', null, toggleControl('max_context_unlocked', s.max_context_unlocked))}
+        ${rowField('Seed', '-1 = random', numberInput('seed', s.seed))}
+        ${rowField('n (completions)', null, numberInput('n', s.n))}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>Behavior</h3>
+      <div class="group">
+        ${rowField('Streaming', null, toggleControl('stream_openai', s.stream_openai))}
+        ${rowField('Reasoning Effort', null, selectControl('reasoning_effort', s.reasoning_effort, ['auto','low','medium','high']))}
+        ${rowField('Show Thoughts', null, toggleControl('show_thoughts', s.show_thoughts))}
+        ${rowField('Squash System Messages', null, toggleControl('squash_system_messages', s.squash_system_messages))}
+        ${rowField('Use System Prompt', null, toggleControl('use_sysprompt', s.use_sysprompt))}
+        ${rowField('Names Behavior', '0=none, 1=user only, 2=all', numberInput('names_behavior', s.names_behavior))}
+        ${rowField('Verbosity', null, selectControl('verbosity', s.verbosity, ['auto','low','medium','high']))}
+        ${rowField('Tool Reasoning Mode', null, selectControl('tool_reasoning_mode', s.tool_reasoning_mode, ['disabled','auto','always']))}
+        ${rowField('Function Calling', null, toggleControl('function_calling', s.function_calling))}
+        ${rowField('Web Search', null, toggleControl('enable_web_search', s.enable_web_search))}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>Prompts</h3>
+      <div class="group">
+        ${field('System Prompt', 'Used as default for new conversations', textAreaInput('system_prompt', s.system_prompt, 6))}
+        ${field('Assistant Prefill', null, textAreaInput('assistant_prefill', s.assistant_prefill, 3))}
+        ${field('Assistant Impersonation', null, textAreaInput('assistant_impersonation', s.assistant_impersonation, 3))}
+        ${rowField('Continue Prefill', null, toggleControl('continue_prefill', s.continue_prefill))}
+        ${field('Continue Postfix', null, textInput('continue_postfix', s.continue_postfix))}
+        ${field('Continue Nudge Prompt', null, textAreaInput('continue_nudge_prompt', s.continue_nudge_prompt, 2))}
+        ${field('New Chat Prompt', null, textAreaInput('new_chat_prompt', s.new_chat_prompt, 2))}
+        ${field('New Example Chat Prompt', null, textAreaInput('new_example_chat_prompt', s.new_example_chat_prompt, 2))}
+        ${field('New Group Chat Prompt', null, textAreaInput('new_group_chat_prompt', s.new_group_chat_prompt, 2))}
+        ${field('Impersonation Prompt', null, textAreaInput('impersonation_prompt', s.impersonation_prompt, 4))}
+        ${field('Group Nudge Prompt', null, textAreaInput('group_nudge_prompt', s.group_nudge_prompt, 2))}
+        ${field('Personality Format', null, textInput('personality_format', s.personality_format))}
+        ${field('Scenario Format', null, textInput('scenario_format', s.scenario_format))}
+        ${field('WI Format', null, textInput('wi_format', s.wi_format))}
+        ${field('Send if Empty', null, textInput('send_if_empty', s.send_if_empty))}
+      </div>
+    </div>
+
+    <div class="sect">
+      <h3>SillyTavern Sync</h3>
+      <div class="group">
+        ${field('SillyTavern URL', null, textInput('st_url', s.st_url, 'url'))}
+        ${field('Basic Auth User', null, textInput('st_basic_user', s.st_basic_user))}
+        ${field('Basic Auth Password', null, textInput('st_basic_pass', s.st_basic_pass, 'password'))}
+      </div>
+    </div>
+
+    <div class="sect" style="text-align:center;color:var(--text-faint);font-size:11px;padding:12px 0 0;">
+      Bubble · settings stored locally in your browser
+    </div>
+  `;
+
+  // Two-way bind
+  body.querySelectorAll<HTMLElement>('[data-bind]').forEach(el => {
+    const key = (el as any).dataset.bind as keyof Settings;
+    el.addEventListener('input', () => persistFromControl(el, key));
+    el.addEventListener('change', () => persistFromControl(el, key));
+  });
+  body.querySelectorAll<HTMLDivElement>('[data-toggle]').forEach(el => {
+    const key = el.dataset.toggle as keyof Settings;
+    el.addEventListener('click', async () => {
+      const next = !el.classList.contains('on');
+      el.classList.toggle('on', next);
+      await store.updateSettings({ [key]: next } as any);
+      buzz();
+    });
+  });
+}
+
+async function persistFromControl(el: HTMLElement, key: keyof Settings) {
+  const tagName = el.tagName;
+  let val: any;
+  if (tagName === 'INPUT') {
+    const inp = el as HTMLInputElement;
+    if (inp.type === 'number' || inp.type === 'range') val = inp.value === '' ? 0 : Number(inp.value);
+    else val = inp.value;
+  } else if (tagName === 'SELECT') {
+    val = (el as HTMLSelectElement).value;
+  } else if (tagName === 'TEXTAREA') {
+    val = (el as HTMLTextAreaElement).value;
+  }
+  // sync slider value display
+  if ((el as HTMLInputElement).type === 'range') {
+    const v = $(`[data-val-for="${key}"]`);
+    if (v) v.textContent = String(val);
+  }
+  await store.updateSettings({ [key]: val } as any);
+}
+
+async function resyncFromST() {
+  const s = store.settings;
+  if (!s.st_url || !s.st_basic_user || !s.st_basic_pass) {
+    toast('Fill SillyTavern URL + basic auth in Settings first', 'error');
+    return;
+  }
+  toast('Syncing from SillyTavern…');
+  const fetched = await fetchSettingsFromST(s.st_url, s.st_basic_user, s.st_basic_pass);
+  if (!fetched) {
+    toast('Sync failed (check creds & URL)', 'error');
+    return;
+  }
+  await store.updateSettings(fetched);
+  renderSettingsSheet();
+  toast('Synced ✓');
+  buzz(20);
+}
