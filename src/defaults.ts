@@ -5,8 +5,8 @@ import type { Settings } from './types';
 export const DEFAULT_SETTINGS: Settings = {
   // API Connections
   chat_completion_source: 'claude',
-  reverse_proxy: 'https://claude-code-proxy-production.up.railway.app/v1',
-  proxy_password: '4488',
+  reverse_proxy: '',
+  proxy_password: '',
   claude_model: 'claude-opus-4-5',
   custom_model: '',
   custom_url: '',
@@ -60,8 +60,8 @@ export const DEFAULT_SETTINGS: Settings = {
   send_if_empty: '',
 
   // Bubble-specific (sync source)
-  st_url: 'https://sillytavern-deploy-production.up.railway.app',
-  st_basic_user: 'sillytavern',
+  st_url: '',
+  st_basic_user: '',
   st_basic_pass: '',
 };
 
